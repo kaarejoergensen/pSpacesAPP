@@ -1,12 +1,14 @@
 import org.jspace.*;
 
+import java.io.IOException;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 
 public class Server {
-    private final static String URI = "tcp://127.0.0.1:9001/";
+    final static String URI = "tcp://127.0.0.1:9001/";
     private final static String GATE_URI = URI + "?keep";
 
     public static void main(String[] args) throws InterruptedException {
@@ -14,12 +16,10 @@ public class Server {
         repository.addGate(GATE_URI);
         repository.add("aspace", new SequentialSpace());
         Space space = repository.get("aspace");
-        space.put("existingrooms", new ArrayList<>());
+        space.put("rooms", new ArrayList<>());
         System.out.println("Server started!");
 
         new Thread(new Create(repository, space)).start();
-        new Thread(new Exists(space)).start();
-        new Thread(new Rooms(space)).start();
     }
 }
 
@@ -29,7 +29,7 @@ class Create implements Runnable {
     private SpaceRepository repository;
     private Space space;
 
-    public Create(SpaceRepository repository, Space space) {
+    Create(SpaceRepository repository, Space space) {
         this.repository = repository;
         this.space = space;
     }
@@ -48,11 +48,44 @@ class Create implements Runnable {
                 } while (repository.get("UID") != null);
                 repository.add(UID.toString(), new SequentialSpace());
                 space.put("createResult", UID.toString(), create[1]);
-                Object[] rooms = space.get(new ActualField("existingrooms"), new FormalField(Object.class));
+
+                Object[] rooms = space.get(new ActualField("rooms"), new FormalField(Object.class));
                 List<String>  rooms1 = (ArrayList<String>) rooms[1];
                 rooms1.add(UID.toString());
-                space.put("existingrooms", rooms1);
+                space.put("rooms", rooms1);
+
+                new Thread(new EnterRoom(new RemoteSpace(Server.URI + UID.toString() + "?keep"), UID.toString())).start();
+                new Thread(new Room(new RemoteSpace(Server.URI + UID.toString() + "?keep"))).start();
                 System.out.println("New room with UID " + UID + " created!");
+            } catch (InterruptedException | IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+
+class EnterRoom implements Runnable {
+    private Space space;
+    private String UID;
+
+    public EnterRoom(Space space, String UID) throws InterruptedException {
+        this.space = space;
+        this.UID = UID;
+        space.put("users", new ArrayList<String>());
+    }
+
+    @Override
+    public void run() {
+        while (true) {
+            try {
+                Object[] enter = space.get(new ActualField("enter"), new ActualField(UID), new FormalField(String.class));
+                Object[] users = space.get(new ActualField("users"), new FormalField(Object.class));
+                List<String> usersList = (ArrayList<String>) users[1];
+                usersList.add((String) enter[2]);
+                space.put("users", usersList);
+                space.put("enterResult", enter[2]);
+                space.put("message", "User '" + enter[2] + "' entered room!", "System");
+                System.out.println("Added user " + enter[2] + " to room " + UID);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
@@ -60,10 +93,10 @@ class Create implements Runnable {
     }
 }
 
-class Exists implements Runnable {
+class Room implements Runnable {
     private Space space;
 
-    public Exists(Space space) {
+    public Room(Space space) {
         this.space = space;
     }
 
@@ -71,33 +104,17 @@ class Exists implements Runnable {
     public void run() {
         while (true) {
             try {
-                Object[] exists = space.get(new ActualField("exists"), new FormalField(String.class), new FormalField(String.class));
-                System.out.println("Checking if room " + exists[1] + " exists!");
-                Object[] checkRooms = space.query(new ActualField("existingrooms"), new FormalField(Object.class));
-                List<String> rooms = (List<String>) checkRooms[1];
-                Boolean doesExist = rooms.stream().anyMatch(r -> r.equals(exists[1]));
-                space.put("existsResult", doesExist, exists[2]);
-                System.out.println("Room " + exists[1] + " exists: " + doesExist);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        }
-    }
-}
-
-class Rooms implements Runnable {
-    private Space space;
-
-    public Rooms(Space space) {
-        this.space = space;
-    }
-
-    @Override
-    public void run() {
-        while (true) {
-            try {
-                Object[] rooms = space.get(new ActualField("rooms"), new FormalField(String.class));
-                space.put("roomsResult", space.get(new ActualField("existingrooms"), new FormalField(Object.class))[1], rooms[1]);
+                Object[] message = space.get(new ActualField("message"), new FormalField(String.class), new FormalField(String.class));
+                Object[] users = space.query(new ActualField("users"), new FormalField(Object.class));
+                List<String> usersList = (List<String>) users[1];
+                System.out.println("Got message " + message[1] + " from " + message[2] + ". Sending to " + (usersList.size() - 1) + " users.");
+                usersList.stream().filter(u -> !u.equals(message[2])).forEach(u -> {
+                    try {
+                        space.put("message" + u, message[1], message[2]);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                });
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
